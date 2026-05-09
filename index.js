@@ -178,6 +178,7 @@ app.post('/api/login', async (req, res) => {
 
 app.get('/api/user/info', async (req, res) => {
     try {
+        // 这里的 SELECT * 已经包含了我们在数据库里新加的 likes_count 字段
         const [u] = await pool.execute('SELECT * FROM users WHERE id = ?', [req.query.id]);
         if (u.length === 0) return res.json({ code: 404 });
         const [fo] = await pool.execute('SELECT COUNT(*) as c FROM user_follows WHERE follower_id = ?', [req.query.id]);
@@ -189,6 +190,18 @@ app.get('/api/user/info', async (req, res) => {
 
 app.post('/api/user/avatar', async (req, res) => {
     try { await pool.execute('UPDATE users SET avatar = ? WHERE id = ?', [req.body.avatar, req.body.userId]); res.json({ code: 0 }); } catch (e) { res.status(500).json({ code: 500 }); }
+});
+
+// [新增] 点赞持久化接口
+app.post('/api/user/like', async (req, res) => {
+    try {
+        const { userId } = req.body;
+        // 让数据库里的 likes_count 原子自增 1
+        await pool.execute('UPDATE users SET likes_count = likes_count + 1 WHERE id = ?', [userId]);
+        res.json({ code: 0, msg: '感谢点赞' });
+    } catch (e) { 
+        res.status(500).json({ code: 500, error: e.message }); 
+    }
 });
 
 // --- Social System ---
