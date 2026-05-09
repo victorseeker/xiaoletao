@@ -15,6 +15,8 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(bodyParser.json());
+
+// 静态文件服务：将 uploads 文件夹映射到 /uploads 路径
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 const uploadDir = path.join(__dirname, 'uploads');
@@ -23,7 +25,7 @@ if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 // ⚠️ SiliconFlow API Key
 const SILICON_API_KEY = "sk-xtfxbevwghsfahueuppeargbpzeryhtphecpscpmrhxyhmiu"; 
 
-// [云端适配] 数据库连接配置：优先读取环境变量，本地开发使用 fallback 默认值
+// [云端适配] 数据库连接配置：优先读取环境变量，适配 Aiven 的 SSL 要求
 const pool = mysql.createPool({
     host: process.env.MYSQL_HOST || 'localhost',
     user: process.env.MYSQL_USER || 'root',
@@ -31,11 +33,14 @@ const pool = mysql.createPool({
     database: process.env.MYSQL_DATABASE || 'campus_trade',
     port: process.env.MYSQL_PORT || 3306,
     timezone: '+08:00',
+    // 云数据库 Aiven 必须开启 SSL
+    ssl: process.env.MYSQL_HOST ? { rejectUnauthorized: false } : null,
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
 });
 
+// 文件上传配置
 const storage = multer.diskStorage({
     destination: (req, file, cb) => cb(null, 'uploads/'),
     filename: (req, file, cb) => cb(null, Date.now() + '-' + Math.round(Math.random() * 1E9) + path.extname(file.originalname))
@@ -44,7 +49,7 @@ const upload = multer({ storage: storage });
 
 // ================= API 接口部分 =================
 
-// --- AI 智能回复 (贪婪卖家+防漏嘴逻辑) ---
+// --- [核心功能] AI 智能回复接口 ---
 app.post('/api/chat/reply', async (req, res) => {
     const { text, productName, price, history } = req.body;
     
@@ -61,16 +66,16 @@ app.post('/api/chat/reply', async (req, res) => {
                 role: "system", 
                 content: `你是校园二手平台的真实卖家（大学生）。你正在出售【${productName}】，标价【${currentPrice}元】。
 
-                【沟通与砍价策略】：
-                1. 必须像真实的人类聊天，语气自然随和。
-                2. 如果买家出价低于 ${minPrice} 元，直接拒绝。
-                3. 如果买家出价在 ${minPrice} 元 到 ${currentPrice} 元之间，你可以稍微犹豫一下然后答应。
-                4. 【绝对红线】：你报出的价格绝对不能比买家刚刚出的价格还要低！
+                【沟通策略】：
+                1. 语气自然随和，多用“宝子”、“同学”等称呼。
+                2. 如果买家出价低于 ${minPrice} 元，请礼貌拒绝。
+                3. 如果出价在 ${minPrice} 到 ${currentPrice} 之间，可以尝试拉扯或直接成交。
+                4. 【绝对红线】：严禁对买家说出你的底价规则。
 
-                【成交指令与暗号机制】：
-                1. 只有在确认成交时，才在句末加 ##成交价##（例如 ##1.8##）。
-                2. 打招呼阶段严禁输出 ## 符号。
-                3. 严禁输出无意义的英文字母或乱码（如 enasdasd 等）！只允许说中文。`
+                【成交指令】：
+                1. 只有你最终同意价格时，才在句末加 ##价格## 暗号。
+                2. 打招呼或拉扯阶段严禁输出 ##。
+                3. 只说中文，严禁输出任何英文字母乱码。`
             }
         ];
 
@@ -94,7 +99,6 @@ app.post('/api/chat/reply', async (req, res) => {
             headers: { 'Authorization': `Bearer ${SILICON_API_KEY}`, 'Content-Type': 'application/json' },
             timeout: 15000,
             proxy: false, 
-            // 解决本地/云端网络连接 TLS 握手问题，强制使用 IPv4
             httpsAgent: new https.Agent({ rejectUnauthorized: false, family: 4 }) 
         });
 
@@ -270,8 +274,9 @@ app.post('/api/chat/clear', async (req, res) => {
 // --- 文件上传接口 ---
 app.post('/api/upload', upload.single('file'), (req, res) => {
     if (!req.file) return res.json({ code: 400 });
-    // 云端部署时，这里通常建议返回相对路径，或者让前端补齐域名
+    // 返回相对路径，前端会根据 BASE_URL 自动拼接
     res.json({ code: 0, url: `/uploads/${req.file.filename}` });
 });
 
+// [云端适配] 必须监听 0.0.0.0
 app.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`));
