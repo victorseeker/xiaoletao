@@ -102,7 +102,16 @@ app.post('/api/chat/reply', async (req, res) => {
 
         res.json({ code: 0, data: response.data.choices[0].message.content });
     } catch (err) {
-        res.json({ code: 0, data: "宝子，学校网有点卡..." });
+        // [新增] 在 Render 日志里打印出极度详细的错误原因
+        console.error('❌ AI 接口彻底报错:', err.response ? err.response.data : err.message);
+        
+        // [新增] 提取真实错误信息
+        const realError = err.response && err.response.data && err.response.data.message 
+                          ? err.response.data.message 
+                          : err.message;
+        
+        // 把真实的英文/中文报错直接发给手机前端
+        res.json({ code: 0, data: `AI报错了: ${realError}` });
     }
 });
 
@@ -123,34 +132,12 @@ app.get('/api/goods', async (req, res) => {
     } catch (e) { res.status(500).json({ code: 500, error: e.message }); }
 });
 
-// [终极修复版] 发布商品接口：完全参数化绑定，绕过 ANSI_QUOTES 报错机制
 app.post('/api/goods', async (req, res) => {
     try {
         const { title, price, desc, image, userId, userName } = req.body;
-        console.log('📢 收到发布请求参数:', req.body);
-
-        const safeDesc = desc || '这个卖家很懒，没有写详细描述~';
-        const safeImage = image || '';
-
-        // 彻底杜绝在 SQL 字符串内写任何形式的引号或方括号，全用问号 (?) 占位
-        const sql = "INSERT INTO goods (title, price, description, image, status, user_id, user_name, views, comments_json) VALUES (?, ?, ?, ?, 1, ?, ?, 0, ?)";
-
-        // 把初始空数组的 JSON 字符串 '[]' 放到占位参数里传入
-        const [r] = await pool.execute(sql, [
-            title, 
-            price, 
-            safeDesc, 
-            safeImage, 
-            userId, 
-            userName || '匿名用户',
-            '[]'
-        ]);
-        
-        res.json({ code: 0, id: r.insertId, msg: '发布成功！' });
-    } catch (e) { 
-        console.error('❌ 写入商品数据库失败:', e);
-        res.json({ code: 500, msg: `发布失败: ${e.message}` }); 
-    }
+        const [r] = await pool.execute('INSERT INTO goods (title, price, description, image, status, user_id, user_name, views, comments_json) VALUES (?,?,?,?,1,?,?,0,"[]")', [title, price, desc, image||'', userId, userName]);
+        res.json({ code: 0, id: r.insertId, msg: '发布成功' });
+    } catch (e) { res.status(500).json({ code: 500 }); }
 });
 
 app.post('/api/goods/update', async (req, res) => {
@@ -200,6 +187,7 @@ app.post('/api/login', async (req, res) => {
 
 app.get('/api/user/info', async (req, res) => {
     try {
+        // 这里的 SELECT * 已经包含了我们在数据库里新加的 likes_count 字段
         const [u] = await pool.execute('SELECT * FROM users WHERE id = ?', [req.query.id]);
         if (u.length === 0) return res.json({ code: 404 });
         const [fo] = await pool.execute('SELECT COUNT(*) as c FROM user_follows WHERE follower_id = ?', [req.query.id]);
@@ -213,10 +201,11 @@ app.post('/api/user/avatar', async (req, res) => {
     try { await pool.execute('UPDATE users SET avatar = ? WHERE id = ?', [req.body.avatar, req.body.userId]); res.json({ code: 0 }); } catch (e) { res.status(500).json({ code: 500 }); }
 });
 
-// 点赞持久化接口
+// [新增] 点赞持久化接口
 app.post('/api/user/like', async (req, res) => {
     try {
         const { userId } = req.body;
+        // 让数据库里的 likes_count 原子自增 1
         await pool.execute('UPDATE users SET likes_count = likes_count + 1 WHERE id = ?', [userId]);
         res.json({ code: 0, msg: '感谢点赞' });
     } catch (e) { 
@@ -291,18 +280,17 @@ app.post('/api/chat/clear', async (req, res) => {
     try { await pool.execute('DELETE FROM chat_history WHERE user_id = ? AND goods_id = ?', [req.body.userId, req.body.goodsId]); res.json({ code: 0 }); } catch (e) { res.status(500).json({ code: 500 }); }
 });
 
-// --- File Upload (修复版：强制使用绝对路径生成机制) ---
+// --- File Upload ---
 const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        cb(null, path.join(__dirname, 'uploads'));
-    },
+    destination: (req, file, cb) => cb(null, 'uploads/'),
     filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
 });
 const upload = multer({ storage: storage });
 
 app.post('/api/upload', upload.single('file'), (req, res) => {
-    if (!req.file) return res.json({ code: 400, msg: '图片文件接收失败' });
-    res.json({ code: 0, url: `/uploads/${req.file.filename}`, msg: '上传成功' });
+    if (!req.file) return res.json({ code: 400 });
+    // Returns relative path for cloud flexibility
+    res.json({ code: 0, url: `/uploads/${req.file.filename}` });
 });
 
 // Start Server
