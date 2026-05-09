@@ -123,24 +123,32 @@ app.get('/api/goods', async (req, res) => {
     } catch (e) { res.status(500).json({ code: 500, error: e.message }); }
 });
 
-// [修复版] 发布商品接口：带参数日志打印和具体的错误提示
+// [终极修复版] 发布商品接口：完全参数化绑定，绕过 ANSI_QUOTES 报错机制
 app.post('/api/goods', async (req, res) => {
     try {
         const { title, price, desc, image, userId, userName } = req.body;
-        console.log('📢 收到发布请求参数:', req.body); // 打印到 Render 日志方便排查
+        console.log('📢 收到发布请求参数:', req.body);
 
-        // 防止 desc 为空导致数据库非空报错
         const safeDesc = desc || '这个卖家很懒，没有写详细描述~';
         const safeImage = image || '';
 
-        const [r] = await pool.execute(
-            'INSERT INTO goods (title, price, description, image, status, user_id, user_name, views, comments_json) VALUES (?,?,?,?,1,?,?,0,"[]")', 
-            [title, price, safeDesc, safeImage, userId, userName]
-        );
+        // 彻底杜绝在 SQL 字符串内写任何形式的引号或方括号，全用问号 (?) 占位
+        const sql = "INSERT INTO goods (title, price, description, image, status, user_id, user_name, views, comments_json) VALUES (?, ?, ?, ?, 1, ?, ?, 0, ?)";
+
+        // 把初始空数组的 JSON 字符串 '[]' 放到占位参数里传入
+        const [r] = await pool.execute(sql, [
+            title, 
+            price, 
+            safeDesc, 
+            safeImage, 
+            userId, 
+            userName || '匿名用户',
+            '[]'
+        ]);
+        
         res.json({ code: 0, id: r.insertId, msg: '发布成功！' });
     } catch (e) { 
         console.error('❌ 写入商品数据库失败:', e);
-        // 关键：吐出 HTTP 200，但携带业务 code 500 和具体的报错原因，这样 App 才会弹窗
         res.json({ code: 500, msg: `发布失败: ${e.message}` }); 
     }
 });
@@ -286,7 +294,6 @@ app.post('/api/chat/clear', async (req, res) => {
 // --- File Upload (修复版：强制使用绝对路径生成机制) ---
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        // 使用绝对路径，确保 Linux 系统不会存错位置
         cb(null, path.join(__dirname, 'uploads'));
     },
     filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
