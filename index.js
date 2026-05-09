@@ -123,12 +123,26 @@ app.get('/api/goods', async (req, res) => {
     } catch (e) { res.status(500).json({ code: 500, error: e.message }); }
 });
 
+// [修复版] 发布商品接口：带参数日志打印和具体的错误提示
 app.post('/api/goods', async (req, res) => {
     try {
         const { title, price, desc, image, userId, userName } = req.body;
-        const [r] = await pool.execute('INSERT INTO goods (title, price, description, image, status, user_id, user_name, views, comments_json) VALUES (?,?,?,?,1,?,?,0,"[]")', [title, price, desc, image||'', userId, userName]);
-        res.json({ code: 0, id: r.insertId, msg: '发布成功' });
-    } catch (e) { res.status(500).json({ code: 500 }); }
+        console.log('📢 收到发布请求参数:', req.body); // 打印到 Render 日志方便排查
+
+        // 防止 desc 为空导致数据库非空报错
+        const safeDesc = desc || '这个卖家很懒，没有写详细描述~';
+        const safeImage = image || '';
+
+        const [r] = await pool.execute(
+            'INSERT INTO goods (title, price, description, image, status, user_id, user_name, views, comments_json) VALUES (?,?,?,?,1,?,?,0,"[]")', 
+            [title, price, safeDesc, safeImage, userId, userName]
+        );
+        res.json({ code: 0, id: r.insertId, msg: '发布成功！' });
+    } catch (e) { 
+        console.error('❌ 写入商品数据库失败:', e);
+        // 关键：吐出 HTTP 200，但携带业务 code 500 和具体的报错原因，这样 App 才会弹窗
+        res.json({ code: 500, msg: `发布失败: ${e.message}` }); 
+    }
 });
 
 app.post('/api/goods/update', async (req, res) => {
@@ -178,7 +192,6 @@ app.post('/api/login', async (req, res) => {
 
 app.get('/api/user/info', async (req, res) => {
     try {
-        // 这里的 SELECT * 已经包含了我们在数据库里新加的 likes_count 字段
         const [u] = await pool.execute('SELECT * FROM users WHERE id = ?', [req.query.id]);
         if (u.length === 0) return res.json({ code: 404 });
         const [fo] = await pool.execute('SELECT COUNT(*) as c FROM user_follows WHERE follower_id = ?', [req.query.id]);
@@ -192,11 +205,10 @@ app.post('/api/user/avatar', async (req, res) => {
     try { await pool.execute('UPDATE users SET avatar = ? WHERE id = ?', [req.body.avatar, req.body.userId]); res.json({ code: 0 }); } catch (e) { res.status(500).json({ code: 500 }); }
 });
 
-// [新增] 点赞持久化接口
+// 点赞持久化接口
 app.post('/api/user/like', async (req, res) => {
     try {
         const { userId } = req.body;
-        // 让数据库里的 likes_count 原子自增 1
         await pool.execute('UPDATE users SET likes_count = likes_count + 1 WHERE id = ?', [userId]);
         res.json({ code: 0, msg: '感谢点赞' });
     } catch (e) { 
@@ -271,17 +283,19 @@ app.post('/api/chat/clear', async (req, res) => {
     try { await pool.execute('DELETE FROM chat_history WHERE user_id = ? AND goods_id = ?', [req.body.userId, req.body.goodsId]); res.json({ code: 0 }); } catch (e) { res.status(500).json({ code: 500 }); }
 });
 
-// --- File Upload ---
+// --- File Upload (修复版：强制使用绝对路径生成机制) ---
 const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, 'uploads/'),
+    destination: (req, file, cb) => {
+        // 使用绝对路径，确保 Linux 系统不会存错位置
+        cb(null, path.join(__dirname, 'uploads'));
+    },
     filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
 });
 const upload = multer({ storage: storage });
 
 app.post('/api/upload', upload.single('file'), (req, res) => {
-    if (!req.file) return res.json({ code: 400 });
-    // Returns relative path for cloud flexibility
-    res.json({ code: 0, url: `/uploads/${req.file.filename}` });
+    if (!req.file) return res.json({ code: 400, msg: '图片文件接收失败' });
+    res.json({ code: 0, url: `/uploads/${req.file.filename}`, msg: '上传成功' });
 });
 
 // Start Server
