@@ -92,7 +92,7 @@ app.post('/api/chat/reply', async (req, res) => {
 
         const response = await axios.post('https://api.siliconflow.cn/v1/chat/completions', {
             // 【已更换】使用更稳定的 DeepSeek 模型
-            model: "deepseek-ai/DeepSeek-V2-Lite-Chat",
+            model: "deepseek-ai/DeepSeek-V4-Flash",
             messages: messages,
             max_tokens: 150,
             temperature: 0.7 
